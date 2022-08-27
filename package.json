@@ -1,0 +1,8 @@
+{
+  "devDependencies": {
+    "sqlite3": "^5.0.11"
+  },
+  "dependencies": {
+    "guid": "^0.0.12"
+  }
+}
