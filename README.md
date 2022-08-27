@@ -26,7 +26,7 @@ npm install
 ## 3. 启动
 
 ```
-nom run server
+npm run server
 ```
 
 ## 4. 访问接口
