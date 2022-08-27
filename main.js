@@ -98,7 +98,7 @@ async function getRowsBySql(db, sql) {
   });
 }
 
-function start() {
+async function start() {
   let index = 0;
   var server = http.createServer()
 
@@ -106,19 +106,12 @@ function start() {
     console.log('服务器启动成功了，可以通过 http://127.0.0.1:3000/ 来进行访问')
   })
 
-  server.on('request', function (request, response) {
+  server.on('request', async function (request, response) {
     console.log('已经响应了', index++);
-    getTask(Guid.create().value)
-      .then((res) => {
-        response.write(JSON.stringify(res))
-        response.end()
-      })
-      .catch((res) => {
-        response.write(JSON.stringify({
-          msg: res
-        }))
-        response.end()
-      })
+
+    const res = await getTask(Guid.create().value)
+    response.write(JSON.stringify(res))
+    response.end()
   })
 }
 
