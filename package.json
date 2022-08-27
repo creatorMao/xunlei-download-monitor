@@ -1,4 +1,7 @@
 {
+  "scripts": {
+    "server": "node main.js"
+  },
   "devDependencies": {
     "sqlite3": "^5.0.11"
   },
