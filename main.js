@@ -63,11 +63,16 @@ async function getTask(guid) {
     }
 
     db.close(() => {
-      var files = fs.readdirSync(toPath)
-      files.forEach((item) => {
-        fs.unlinkSync(path.resolve(toPath, item))
-      })
-      fs.rmdirSync(toPath)
+      try {
+        var files = fs.readdirSync(toPath)
+        files.forEach((item) => {
+          fs.unlinkSync(path.resolve(toPath, item))
+        })
+        fs.rmdirSync(toPath)
+      }
+      catch (err) {
+        return err
+      }
     });
 
     return resultList
