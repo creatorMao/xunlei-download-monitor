@@ -91,7 +91,7 @@ function connectDB(dbFile) {
   return new sqlite3.Database(dbFile, err => { })
 }
 
-async function getRowsBySql(db, sql) {
+function getRowsBySql(db, sql) {
   return new Promise((resolve, reject) => {
     db.all(sql, function (err, rows) {
       if (err) {
@@ -103,7 +103,7 @@ async function getRowsBySql(db, sql) {
   });
 }
 
-async function start() {
+function start() {
   let index = 0;
   var server = http.createServer()
 
