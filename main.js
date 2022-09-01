@@ -4,7 +4,7 @@ const sqlite3 = require('sqlite3');
 const http = require('http')
 const Guid = require('guid');
 
-async function getTask(guid) {
+function init(guid) {
   const copyPath = "C:/Program Files (x86)/Thunder Network/Thunder/Profiles"
   const copyDbFilePath = `${copyPath}/TaskDb.dat`
 
@@ -12,13 +12,37 @@ async function getTask(guid) {
   const toDbFilePath = `${toPath}/TaskDb.dat`
 
   fs.mkdirSync(toPath)
-
   fs.copyFileSync(copyDbFilePath, path.resolve(__dirname, toDbFilePath))
 
-  let resultList = [];
+  const db = new sqlite3.Database(toDbFilePath, err => { })
 
-  const db = connectDB(toDbFilePath)
-  const taskList = await getRowsBySql(db, 'SELECT TaskId,Type,UserData FROM TaskBase where Status=5')
+  return {
+    db,
+    copyPath,
+    toPath
+  };
+}
+
+function close(db, filePath) {
+  db.close(() => {
+    try {
+      var files = fs.readdirSync(filePath)
+      files.forEach((item) => {
+        fs.unlinkSync(path.resolve(filePath, item))
+      })
+      fs.rmdirSync(filePath)
+    }
+    catch (err) {
+      return err
+    }
+  });
+}
+
+async function getDownloadingTask(guid) {
+  const { db, copyPath, toPath } = init(guid)
+
+  let resultList = [];
+  const taskList = await getRowsBySql(db, 'SELECT Name,TaskId,Type,UserData FROM TaskBase where Status=5')
   if (taskList.length === 0) {
     return []
   }
@@ -26,20 +50,10 @@ async function getTask(guid) {
     let taskLength = taskList.length;
     for (let index = 0; index < taskList.length; index++) {
       let taskId = taskList[index]['TaskId']
-      let fileInfo = undefined;
-
-      switch (taskList[index]['Type']) {
-        case 1:
-          fileInfo = await getRowsBySql(db, `SELECT id,name,file_extension FROM user_file where id='${parseFileId(taskList[index].UserData.toString())}'`)
-          break;
-        case 2:
-          fileInfo = await getRowsBySql(db, `SELECT BtFileId as id,FileName as name,'' as file_extension FROM BtFile where BtTaskId='${taskId}'`)
-          break;
-      }
 
       let resItem = {
         taskId,
-        fileName: fileInfo[0].name.toString() + fileInfo[0].file_extension
+        fileName: taskList[index]['Name']
       }
 
       const copyTaskInfoExtTxtPath = `${copyPath}/TaskSpeedInfo/TaskInfoEx_${resItem.taskId}.txt`
@@ -59,23 +73,51 @@ async function getTask(guid) {
         console.log("日志读取失败", e);
       }
 
+      if (resItem.progress != 100) {
+        resultList.push(resItem);
+      }
+      else {
+        //任务表里是下载状态，但是日志文件里显示已经100了，所以将这些异常任务存起来，当作已完成处理。
+        addUnusualList(resItem);
+      }
+    }
+
+    close(db, toPath)
+
+    return resultList
+  }
+}
+
+async function getCompleteTask(guid) {
+  const { db, toPath } = init(guid)
+
+  let resultList = [];
+
+  const taskList = await getRowsBySql(db, `select * from(
+    sELECT 
+    datetime(CompletionTime / 1000, 'unixepoch', 'localtime') || '.' || CAST(CASE WHEN LENGTH(CAST(CompletionTime % 1000 AS TEXT)) = 2 THEN('0' || CAST(CompletionTime % 1000 AS TEXT)) ELSE CompletionTime % 1000 END AS TEXT) AS CompletionTime, Name, TaskId, Type, UserData,DownloadingPeriod FROM TaskBase where Status = 8 and GroupTaskId=0
+  ) order by CompletionTime desc`)
+
+  if (taskList.length === 0) {
+    return []
+  }
+  else {
+    let taskLength = taskList.length;
+    for (let index = 0; index < taskList.length; index++) {
+      let resItem = {
+        taskId: taskList[index]['TaskId'],
+        fileName: taskList[index]['Name'],
+        completionTime: taskList[index]['CompletionTime'],
+        period: taskList[index]['DownloadingPeriod']
+      }
+
       resultList.push(resItem);
     }
 
-    db.close(() => {
-      try {
-        var files = fs.readdirSync(toPath)
-        files.forEach((item) => {
-          fs.unlinkSync(path.resolve(toPath, item))
-        })
-        fs.rmdirSync(toPath)
-      }
-      catch (err) {
-        return err
-      }
-    });
+    close(db, toPath);
 
-    return resultList
+
+    return appendUnusualListToResult(resultList, unusualTaskList)
   }
 }
 
@@ -85,10 +127,6 @@ function parseFileId(text) {
     return fileIdRes[1]
   }
   return ""
-}
-
-function connectDB(dbFile) {
-  return new sqlite3.Database(dbFile, err => { })
 }
 
 function getRowsBySql(db, sql) {
@@ -114,10 +152,60 @@ function start() {
   server.on('request', async function (request, response) {
     console.log('已经响应了', index++);
 
-    const res = await getTask(Guid.create().value)
+    const guid = Guid.create().value
+    let res = []
+    switch (request.url) {
+      case "/":
+      case "/task/downloading":
+        res = await getDownloadingTask(guid)
+        break;
+      case "/task/complete":
+        res = await getCompleteTask(guid)
+        break;
+    }
+
     response.write(JSON.stringify(res))
     response.end()
   })
 }
 
 start();
+
+//因为xunlei本身有一个问题：当前下载任务如果完成了，不会立即更新数据库里的下载状态，会等下一个任务的才会更新。
+//因此，就会始终有一个任务的状态，其实已经完成了，但是数据库里还是下载状态。
+//此数组就是用于存储这些“异常”任务，方便用户请求已完成接口时，追加到结果中。
+let unusualTaskList = [];
+
+function addUnusualList(task) {
+  const existFlag = unusualTaskList.some((unusualTask) => {
+    if (unusualTask.taskId === task.taskId) {
+      return true;
+    }
+    else {
+      return false
+    }
+  })
+  if (!existFlag) {
+    unusualTaskList.push(task);
+  }
+}
+
+function appendUnusualListToResult(resultList, unusualTaskList) {
+  unusualTaskList.forEach((unusualTask) => {
+    const existFlag = resultList.some((item) => {
+      if (item.taskId === unusualTask.taskId) {
+        return true;
+      }
+      else {
+        return false
+      }
+    })
+    if (!existFlag) {
+      unusualTask.completionTime = "";
+      unusualTask.period = "";
+      resultList.unshift(unusualTask);
+    }
+  })
+
+  return resultList
+}
